@@ -72,6 +72,14 @@ def admin_required(f):
 
 # --- REST API Endpoints ---
 
+def _int_arg(name, default):
+    """Parses an integer query arg, falling back to the default when malformed."""
+    try:
+        return int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
     """Returns overview statistics from CSV or requested vault."""
@@ -96,8 +104,8 @@ def get_proposals():
     """Returns paginated, filtered proposals from the requested vault."""
     source = request.args.get('source', 'csv')
     vault = request.args.get('vault', 'proposals')
-    page = int(request.args.get('page', 1))
-    page_size = int(request.args.get('page_size', 50))
+    page = _int_arg('page', 1)
+    page_size = _int_arg('page_size', 50)
     search = request.args.get('search', '')
     status = request.args.get('status', '')
     authority = request.args.get('authority', '')
@@ -178,8 +186,8 @@ def get_oc_bp_stats():
 @app.route('/api/oc-bp/proposals', methods=['GET'])
 def get_oc_bp_proposals():
     """Returns paginated, filtered DPMS OC & BP proposals."""
-    page = int(request.args.get('page', 1))
-    page_size = int(request.args.get('page_size', 50))
+    page = _int_arg('page', 1)
+    page_size = _int_arg('page_size', 50)
     search = request.args.get('search', '')
     project_type = request.args.get('project_type', '')
     case_type = request.args.get('case_type', '')
@@ -241,8 +249,8 @@ def get_oc_bp_detail(file_number):
 @app.route('/api/unified-search', methods=['GET'])
 def get_unified_search():
     """Returns paginated, multi-dataset unified proposals search results."""
-    page = int(request.args.get('page', 1))
-    page_size = int(request.args.get('page_size', 25))
+    page = _int_arg('page', 1)
+    page_size = _int_arg('page_size', 25)
     search = request.args.get('search', '')
     dataset = request.args.get('dataset', 'all')
     authority = request.args.get('authority', '')
@@ -283,8 +291,8 @@ def get_unified_search():
 @app.route('/api/public-search', methods=['GET'])
 def get_public_search():
     """Public Search API: Searches across all indexed records, metadata, and files by number/letter."""
-    page = int(request.args.get('page', 1))
-    page_size = int(request.args.get('page_size', 25))
+    page = _int_arg('page', 1)
+    page_size = _int_arg('page_size', 25)
     search = request.args.get('search', '')
     # Accept both 'repository' and 'dataset' query parameters
     repository = request.args.get('repository', request.args.get('dataset', 'all'))
@@ -430,7 +438,7 @@ def export_proposals():
     status = request.args.get('status', '')
     authority = request.args.get('authority', '')
     year = request.args.get('year', '')
-    limit = min(10000, int(request.args.get('limit', 5000)))
+    limit = min(10000, _int_arg('limit', 5000))
 
     try:
         result = data_provider.get_proposals(

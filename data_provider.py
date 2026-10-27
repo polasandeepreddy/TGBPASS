@@ -665,12 +665,14 @@ class DataProvider:
         fn_clean = str(file_number).strip().replace('\\', '/')
         fn_upper = fn_clean.upper()
 
-        match = df[
+        mask = (
             (df['file_number'].str.upper() == fn_upper) |
             (df['folder_name'].str.upper() == fn_upper) |
-            (df['folder_name'].str.replace('_', '/').str.upper() == fn_upper) |
-            (df['row_number'].astype(str) == fn_clean)
-        ]
+            (df['folder_name'].str.replace('_', '/').str.upper() == fn_upper)
+        )
+        if 'row_number' in df.columns:
+            mask |= df['row_number'].astype(str) == fn_clean
+        match = df[mask]
         if match.empty:
             match = df[df['file_number'].str.contains(re.escape(fn_clean), case=False, na=False)]
 
@@ -703,7 +705,10 @@ class DataProvider:
         # 1. Check CSV master dataset first
         df = self.load_csv_data()
         if not df.empty:
-            match = df[(df['file_number'] == file_number) | (df['Row'] == str(file_number))]
+            mask = df['file_number'] == file_number
+            if 'row_number' in df.columns:
+                mask |= df['row_number'].astype(str) == str(file_number)
+            match = df[mask]
             if not match.empty:
                 item = match.iloc[0].to_dict()
                 item.pop('_search', None)
