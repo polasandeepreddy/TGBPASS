@@ -3,7 +3,7 @@
  * Supports Public Searches, Document Fetching, and Authenticated Admin Operations with Email+OTP.
  */
 
-const API_BASE = '/api';
+const API_BASE = (import.meta.env && import.meta.env.VITE_API_URL) ? import.meta.env.VITE_API_URL.replace(/\/$/, '') + '/api' : '/api';
 const TOKEN_KEY = 'tgbpass_admin_token';
 
 export const api = {
