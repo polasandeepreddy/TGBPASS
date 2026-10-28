@@ -3,8 +3,20 @@
  * Supports Public Searches, Document Fetching, and Authenticated Admin Operations with Email+OTP.
  */
 
+import { staticPublicSearch, staticStats, documentIds, docKey } from './staticSearch';
+
 const API_BASE = (import.meta.env && import.meta.env.VITE_API_URL) ? import.meta.env.VITE_API_URL.replace(/\/$/, '') + '/api' : '/api';
 const TOKEN_KEY = 'tgbpass_admin_token';
+
+/** Parses a JSON API response; a non-JSON body means the backend is unreachable (e.g. SPA fallback HTML). */
+async function readJson(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('Backend unavailable: the server did not return data. Please try again later.');
+  }
+}
 
 export const api = {
   // --- Admin Token Storage Management ---
@@ -40,10 +52,14 @@ export const api = {
 
   // Fetch overall statistics
   async getStats(source = 'auto', vault = 'proposals') {
-    const res = await fetch(`${API_BASE}/stats?source=${source}&vault=${vault}`);
-    if (!res.ok) throw new Error('Failed to fetch stats');
-    const json = await res.json();
-    return json.data;
+    try {
+      const res = await fetch(`${API_BASE}/stats?source=${source}&vault=${vault}`);
+      if (!res.ok) throw new Error('Failed to fetch stats');
+      const json = await readJson(res);
+      return json.data;
+    } catch {
+      return staticStats();
+    }
   },
 
   // Unified multi-dataset omni-search (TG-bPASS 86.5k + DPMS OC's & BP's 169)
@@ -57,23 +73,14 @@ export const api = {
 
     const res = await fetch(`${API_BASE}/unified-search?${query.toString()}`);
     if (!res.ok) throw new Error('Failed to fetch unified search results');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   },
 
   // Public Search: Search by number, letter, or alphanumeric reference to find related files & records
   async getPublicSearch(params = {}) {
-    const query = new URLSearchParams();
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
-        query.append(key, value);
-      }
-    });
-
-    const res = await fetch(`${API_BASE}/public-search?${query.toString()}`);
-    if (!res.ok) throw new Error('Failed to fetch public search results');
-    const json = await res.json();
-    return json.data;
+    // Runs entirely in the browser against the static JSON archive (no backend required).
+    return staticPublicSearch(params);
   },
 
   // Fetch paginated & filtered proposals
@@ -87,7 +94,7 @@ export const api = {
 
     const res = await fetch(`${API_BASE}/proposals?${query.toString()}`);
     if (!res.ok) throw new Error('Failed to fetch proposals');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   },
 
@@ -95,7 +102,7 @@ export const api = {
   async getProposalDetail(fileNumber) {
     const res = await fetch(`${API_BASE}/proposals/${encodeURIComponent(fileNumber)}`);
     if (!res.ok) throw new Error('Failed to fetch proposal details');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   },
 
@@ -103,12 +110,14 @@ export const api = {
   async getAnalytics(source = 'auto') {
     const res = await fetch(`${API_BASE}/analytics?source=${source}`);
     if (!res.ok) throw new Error('Failed to fetch analytics');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   },
 
   // Get Document Preview URL
   getDocumentUrl(folder, filename, download = false) {
+    const doc = documentIds.get(docKey(folder, filename));
+    if (doc) return download ? doc.download : doc.view;
     return `${API_BASE}/document/${encodeURIComponent(folder)}/${encodeURIComponent(filename)}${download ? '?download=1' : ''}`;
   },
 
@@ -129,7 +138,7 @@ export const api = {
   async getOcBpStats() {
     const res = await fetch(`${API_BASE}/oc-bp/stats`);
     if (!res.ok) throw new Error('Failed to fetch OC & BP stats');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   },
 
@@ -144,7 +153,7 @@ export const api = {
 
     const res = await fetch(`${API_BASE}/oc-bp/proposals?${query.toString()}`);
     if (!res.ok) throw new Error('Failed to fetch OC & BP proposals');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   },
 
@@ -152,7 +161,7 @@ export const api = {
   async getOcBpDetail(fileNumber) {
     const res = await fetch(`${API_BASE}/oc-bp/${encodeURIComponent(fileNumber)}`);
     if (!res.ok) throw new Error('Failed to fetch OC & BP details');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   },
 
@@ -176,7 +185,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: (email || '').trim() })
     });
-    const json = await res.json();
+    const json = await readJson(res);
     if (!res.ok || !json.success) {
       throw new Error(json.error || 'Failed to request OTP. Access denied.');
     }
@@ -193,7 +202,7 @@ export const api = {
         otp: (otp || '').trim()
       })
     });
-    const json = await res.json();
+    const json = await readJson(res);
     if (!res.ok || !json.success) {
       throw new Error(json.error || 'Invalid or expired OTP verification code.');
     }
@@ -217,7 +226,7 @@ export const api = {
         this.clearAdminToken();
         return false;
       }
-      const json = await res.json();
+      const json = await readJson(res);
       return json.authenticated === true;
     } catch {
       return false;
@@ -246,7 +255,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: keyOrPin, pin: keyOrPin })
     });
-    const json = await res.json();
+    const json = await readJson(res);
     if (!res.ok || !json.success) {
       throw new Error(json.error || 'Invalid Admin Security Key or PIN');
     }
@@ -265,7 +274,7 @@ export const api = {
       headers: this.getAuthHeaders(),
       body: JSON.stringify({ limit })
     });
-    const json = await res.json();
+    const json = await readJson(res);
     if (!res.ok) throw new Error(json.error || 'Sync failed');
     return json;
   },
@@ -276,7 +285,7 @@ export const api = {
       headers: this.getAuthHeaders()
     });
     if (!res.ok) throw new Error('Failed to fetch scraper status');
-    const json = await res.json();
+    const json = await readJson(res);
     return json.data;
   }
 };

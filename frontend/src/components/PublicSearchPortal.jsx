@@ -62,6 +62,7 @@ export default function PublicSearchPortal({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState('');
   // View mode: 'files' (Related Files table, default) or 'records' (Application dossiers table)
   const [activeView, setActiveView] = useState('files');
 
@@ -97,6 +98,7 @@ export default function PublicSearchPortal({
 
   const executeSearch = async () => {
     setLoading(true);
+    setSearchError('');
     try {
       const data = await api.getPublicSearch({
         search: activeQuery,
@@ -120,6 +122,11 @@ export default function PublicSearchPortal({
       }
     } catch (err) {
       console.error('Failed to load public search results:', err);
+      setRelatedFiles([]);
+      setProposals([]);
+      setTotalFiles(0);
+      setTotalRecords(0);
+      setSearchError(err.message || 'Failed to load search results');
       if (onShowToast) onShowToast('Failed to load search results', 'error');
     } finally {
       setLoading(false);
@@ -514,6 +521,14 @@ export default function PublicSearchPortal({
             <p style={{ color: '#64748b', fontSize: '0.92rem', margin: 0 }}>
               Checking if file matching <strong>"{activeQuery}"</strong> is available in <strong>{getDatasetLabel(datasetMode)}</strong>...
             </p>
+          </div>
+        ) : searchError ? (
+          <div className="glass-card" style={{ padding: '44px 28px', textAlign: 'center', background: '#fff1f2', border: '1.5px solid #fecdd3', borderRadius: '16px' }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#9f1239', marginBottom: '8px' }}>
+              Unable to Load Records
+            </h3>
+            <p style={{ color: '#64748b', fontSize: '0.92rem', margin: '0 0 16px' }}>{searchError}</p>
+            <button type="button" className="btn btn-primary" onClick={executeSearch}>Retry</button>
           </div>
         ) : (proposals.length === 0 && relatedFiles.length === 0) ? (
           /* NO RECORDS FOUND FOR SELECTED ARCHIVE */

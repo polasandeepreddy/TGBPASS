@@ -16,5 +16,5 @@ for ($i = 0; $i -lt 30 -and -not $url; $i++) {
 }
 if (-not $url) { throw 'Tunnel URL not found in log.' }
 Write-Host "Tunnel: $url"
-$url | npx -y wrangler@4 secret put API_ORIGIN --name tgbpass
-Write-Host "Done. Site: https://tgbpass.tgbpass-portal.workers.dev/  (keep this PC and the minimized windows running)"
+$url | npx -y wrangler@4 secret put API_ORIGIN --name tgs
+Write-Host "Done. Site: https://tgs.tgbpass-portal.workers.dev/  (keep this PC and the minimized windows running)"

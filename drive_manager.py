@@ -247,6 +247,11 @@ class GoogleDriveManager:
             except Exception as e:
                 logger.debug(f"CSV line unwrap check notice: {e}")
 
+            return dest_path
+        except Exception as e:
+            logger.error(f"Error syncing '{filename}' from Google Drive: {e}")
+            return dest_path if dest_path.exists() else None
+
     def sync_all_cloud_datasets(self, force: bool = False) -> Dict[str, bool]:
         """Synchronizes all master cloud datasets and manifests from Google Drive."""
         results = {}
