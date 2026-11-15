@@ -89,6 +89,8 @@ for _out, _seen in results.values():
         indexed.add(_base(k))
 
 _pp = SITE_DIR / 'cache' / 'permits.json'  # written by fetch_permits.py (Drive 'Permit Number.txt')
+_dp = SITE_DIR / 'cache' / 'dates.json'
+dates = json.loads(_dp.read_text(encoding='utf-8')) if _dp.exists() else {}
 permits = json.loads(_pp.read_text(encoding='utf-8')) if _pp.exists() else {}
 added = {'tgbpass': 0, 'oc_bp': 0}
 for key, p in progress.items():
@@ -104,9 +106,9 @@ for key, p in progress.items():
     proc_t, draw_t = ('Proceeding Order', 'Approved Blueprint Drawing') if name == 'oc_bp' else ('Proceeding Letter', 'Building Plan')
     files = []
     if proc_id or not draw_id:
-        files.append({'t': proc_t, 'n': 'Proceeding.pdf' if name == 'oc_bp' else 'Proceeding_Letter.pdf', 'd': '', 'id': proc_id})
+        files.append({'t': proc_t, 'n': 'Proceeding.pdf' if name == 'oc_bp' else 'Proceeding_Letter.pdf', 'd': dates.get(proc_id, ''), 'id': proc_id})
     if draw_id:
-        files.append({'t': draw_t, 'n': 'Drawing.pdf', 'd': '', 'id': draw_id})
+        files.append({'t': draw_t, 'n': 'Drawing.pdf', 'd': dates.get(draw_id, ''), 'id': draw_id})
     rec = {'file_number': key, 'folder_name': key.replace('/', '_'), 'row_number': 0,
            'source_label': 'DPMS OC & BP' if name == 'oc_bp' else 'TG-bPASS',
            'files': files}
