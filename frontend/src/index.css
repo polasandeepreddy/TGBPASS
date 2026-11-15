@@ -1567,3 +1567,18 @@ a:hover {
   transform: translateY(-1px);
 }
 
+
+/* Related-files results table: readable single-line cells, actions always reachable */
+.files-table { table-layout: auto; min-width: 1180px; }
+.files-table th, .files-table td { white-space: nowrap; padding: 12px 14px; }
+.files-table th { cursor: default; }
+.files-table th:hover { color: #334155; }
+.files-table td:nth-child(8) { white-space: normal; min-width: 240px; max-width: 320px; }
+.files-table td:nth-child(5) { overflow: visible; }
+.files-table .sticky-actions {
+  position: sticky; right: 0; z-index: 1; min-width: 190px; text-align: center;
+  background: #ffffff; box-shadow: -8px 0 12px -8px rgba(15, 23, 42, 0.12);
+}
+.files-table thead .sticky-actions { background: var(--bg-tertiary); z-index: 2; }
+.files-table tbody tr:hover .sticky-actions { background: #f8fafc; }
+.files-table .table-action-btn { padding: 6px 12px; font-size: 0.78rem; }

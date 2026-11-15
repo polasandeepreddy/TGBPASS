@@ -7,6 +7,7 @@ import ProposalsTable from './components/ProposalsTable';
 import AnalyticsView from './components/AnalyticsView';
 import OcBpProposalsView from './components/OcBpProposalsView';
 import ScraperMonitor from './components/ScraperMonitor';
+import DonationsView from './components/DonationsView';
 import ProposalDetailModal from './components/ProposalDetailModal';
 import PdfViewerModal from './components/PdfViewerModal';
 import SyncModal from './components/SyncModal';
@@ -32,6 +33,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('explorer'); // 'explorer', 'analytics', 'scraper'
   const [dataSource, setDataSource] = useState('csv');
   const [publicDatasetMode, setPublicDatasetMode] = useState('all'); // 'all', 'oc_bp', 'tgbpass'
+  const [homeKey, setHomeKey] = useState(0);
   const [stats, setStats] = useState(null);
   const [ocBpStats, setOcBpStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(false);
@@ -141,6 +143,15 @@ export default function App() {
     addToast('Returned to Public Citizen Portal', 'info', 'Public Mode');
   };
 
+  // Logo click: back to the public home page with a fresh, empty search.
+  const goHome = () => {
+    setPortalMode('public');
+    setPublicDatasetMode('all');
+    setHomeKey((k) => k + 1);
+    window.location.hash = '#/';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const openAdminLogin = () => {
     setPortalMode('admin');
     window.location.hash = '#admin';
@@ -174,6 +185,7 @@ export default function App() {
       {portalMode === 'public' || !isAdminAuthenticated ? (
         <PublicNavbar 
           onOpenAdmin={openAdminLogin} 
+          onGoHome={goHome}
           activeDataset={publicDatasetMode}
           onSelectDataset={setPublicDatasetMode}
         />
@@ -207,6 +219,7 @@ export default function App() {
         {/* PUBLIC CITIZEN SEARCH PORTAL */}
         {portalMode === 'public' && (
           <PublicSearchPortal 
+            key={`home-${homeKey}`}
             datasetMode={publicDatasetMode}
             onDatasetModeChange={setPublicDatasetMode}
             onOpenPdf={handleOpenPdf}
@@ -268,6 +281,11 @@ export default function App() {
             {/* View 4: Live Scraper Session Monitor */}
             {activeTab === 'scraper' && (
               <ScraperMonitor onShowToast={addToast} />
+            )}
+
+            {/* View 5: Donations (verify, track, export) */}
+            {activeTab === 'donations' && (
+              <DonationsView onShowToast={addToast} />
             )}
           </>
         )}

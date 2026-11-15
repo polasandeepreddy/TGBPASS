@@ -47,3 +47,6 @@ yarn-error.log*
 *.swo
 .DS_Store
 Thumbs.db
+
+# Donation records (local DB)
+donations.db

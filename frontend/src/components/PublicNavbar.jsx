@@ -1,15 +1,21 @@
 import React from 'react';
-import {
-  Building2,
-  ShieldCheck
-} from 'lucide-react';
+import { Building2 } from 'lucide-react';
+import DonateButton from './DonateButton';
 
-export default function PublicNavbar({ onOpenAdmin }) {
+export default function PublicNavbar({ onOpenAdmin, onGoHome }) {
   return (
     <header className="navbar">
       <div className="navbar-inner">
         {/* Brand */}
-        <div className="navbar-brand" style={{ cursor: 'default' }}>
+        <div
+          className="navbar-brand"
+          style={{ cursor: 'pointer' }}
+          role="link"
+          tabIndex={0}
+          title="Go to home"
+          onClick={onGoHome}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onGoHome?.(); } }}
+        >
           <div className="brand-logo" style={{ background: 'linear-gradient(135deg, #0284c7 0%, #06b6d4 100%)' }}>
             <Building2 size={24} />
           </div>
@@ -24,21 +30,7 @@ export default function PublicNavbar({ onOpenAdmin }) {
 
         {/* Right Info Badge & Admin Link */}
         <div className="nav-actions">
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '6px 14px',
-            borderRadius: 'var(--radius-full)',
-            background: '#f0fdf4',
-            border: '1px solid #bbf7d0',
-            color: '#166534',
-            fontSize: '0.8rem',
-            fontWeight: 600
-          }}>
-            <ShieldCheck size={15} color="#16a34a" />
-            <span>Government of Telangana</span>
-          </div>
+          <DonateButton />
         </div>
       </div>
     </header>

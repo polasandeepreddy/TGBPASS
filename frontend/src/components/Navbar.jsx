@@ -5,6 +5,7 @@ import {
   Layers,
   BarChart3,
   Activity,
+  Heart,
   RefreshCw,
   ArrowLeftRight,
   Search,
@@ -295,6 +296,13 @@ export default function Navbar({
           >
             <Activity size={16} />
             <span>Scraper Monitor</span>
+          </button>
+          <button
+            className={`nav-tab-btn ${activeTab === 'donations' ? 'active' : ''}`}
+            onClick={() => setActiveTab('donations')}
+          >
+            <Heart size={16} />
+            <span>Donations</span>
           </button>
         </nav>
 
