@@ -454,11 +454,11 @@ export default function PublicSearchPortal({
               marginBottom: '12px'
             }}>
               <XCircle size={15} />
-              <span>NO RECORDS FOUND</span>
+              <span>NOT AVAILABLE</span>
             </div>
 
             <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', marginBottom: '8px' }}>
-              No Records Found for "{activeQuery}"
+              Not available: "{activeQuery}"
             </h2>
 
             <p style={{ color: '#475569', fontSize: '1.02rem', maxWidth: '640px', margin: '0 auto 20px', lineHeight: 1.6 }}>
