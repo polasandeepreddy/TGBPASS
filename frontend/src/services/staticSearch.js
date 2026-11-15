@@ -14,13 +14,13 @@ const ARCHIVE_LABELS = {
 const alnum = (s) => s.replace(/[^a-z0-9]/g, '');
 const tokenize = (s) => s.split(/[^a-z0-9]+/).filter(Boolean);
 
-const driveViewUrl = (id) => `https://drive.google.com/file/d/${id}/preview`;
-const driveDownloadUrl = (id) => `https://drive.google.com/uc?export=download&id=${id}`;
+// PDFs live on the archive server's local disks and are streamed by the backend.
+const API_BASE = (import.meta.env && import.meta.env.VITE_API_URL)
+  ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api` : '/api';
+const documentUrl = (folder, name, download = false) =>
+  `${API_BASE}/document/${encodeURIComponent(folder)}/${encodeURIComponent(name)}${download ? '?download=1' : ''}`;
 
-const driveFolderViewUrl = (id) => `https://drive.google.com/embeddedfolderview?id=${id}#list`;
-const driveFolderUrl = (id) => `https://drive.google.com/drive/folders/${id}`;
-
-// "folder/doc name" -> { view, download } Drive URLs, filled as records load so api.getDocumentUrl can resolve links.
+// "folder/doc name" -> { view, download } URLs, filled as records load so api.getDocumentUrl can resolve links.
 export const documentIds = new Map();
 export const docKey = (folder, name) => `${folder}/${name}`;
 
@@ -59,9 +59,9 @@ const prepare = (name, rec) => {
   setDoc(draw, 'drawing_pdf');
   setDoc(insp, 'inspection_report');
   rec.files = rec.files.map((f) => {
-    // Prefer the exact Drive file; otherwise fall back to the record's Drive folder.
-    const view = f.id ? driveViewUrl(f.id) : (rec.fu ? driveFolderViewUrl(rec.fu) : '');
-    const download = f.id ? driveDownloadUrl(f.id) : (rec.fu ? driveFolderUrl(rec.fu) : '');
+    // Every exported file exists in the record's local folder (the export only lists PDFs found on disk).
+    const view = rec.folder_name ? documentUrl(rec.folder_name, f.n) : '';
+    const download = rec.folder_name ? documentUrl(rec.folder_name, f.n, true) : '';
     if (view) documentIds.set(docKey(rec.folder_name, f.n), { view, download });
     const available = !!view;
     return {
@@ -79,7 +79,7 @@ const prepare = (name, rec) => {
       status: available ? 'Available' : 'Offline',
       is_available: available,
       can_download: available,
-      storage: 'Google Drive Cloud Storage',
+      storage: 'Local Archive',
       view_url: view,
       download_url: download,
       _layout: isLayout,

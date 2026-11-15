@@ -49,7 +49,7 @@ export default function DocumentAuditView({ dataSource, onOpenPdf, onSelectPropo
       const data = await api.getProposalDetail(testFileNo.trim());
       setTestResult(data);
     } catch (err) {
-      setTestResult({ error: 'Proposal not found or could not be verified in Google Drive Cloud Storage.' });
+      setTestResult({ error: 'Proposal not found or could not be verified in the local document archive.' });
     } finally {
       setTestLoading(false);
     }
@@ -60,7 +60,7 @@ export default function DocumentAuditView({ dataSource, onOpenPdf, onSelectPropo
       <div style={{ textAlign: 'center', padding: '80px 20px', color: 'var(--text-muted)' }}>
         <div className="live-pulse" style={{ marginBottom: '16px', width: '12px', height: '12px' }}></div>
         <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-          Auditing Google Drive Cloud Document Archives...
+          Auditing Local Document Archives...
         </div>
       </div>
     );
@@ -143,7 +143,7 @@ export default function DocumentAuditView({ dataSource, onOpenPdf, onSelectPropo
       <div className="glass-card" style={{ padding: '24px' }}>
         <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <HardDrive size={18} color="var(--accent-sky)" />
-          <span>Google Drive Cloud Document Verifier</span>
+          <span>Local Archive Document Verifier</span>
         </h3>
 
         <form onSubmit={handleTestLookup} style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
@@ -152,13 +152,13 @@ export default function DocumentAuditView({ dataSource, onOpenPdf, onSelectPropo
             <input 
               type="text" 
               className="search-input" 
-              placeholder="Enter exact File Number (e.g. 000483/GHMC/0224/KPL2/2025-BP) to test files in Google Drive Cloud..."
+              placeholder="Enter exact File Number (e.g. 000483/GHMC/0224/KPL2/2025-BP) to test files in the local archive..."
               value={testFileNo}
               onChange={(e) => setTestFileNo(e.target.value)}
             />
           </div>
           <button type="submit" className="btn-primary" disabled={testLoading || !testFileNo.trim()}>
-            {testLoading ? 'Verifying...' : 'Verify in Google Drive'}
+            {testLoading ? 'Verifying...' : 'Verify in Local Archive'}
           </button>
         </form>
 

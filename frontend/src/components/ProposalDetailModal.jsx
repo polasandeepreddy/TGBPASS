@@ -181,7 +181,7 @@ export default function ProposalDetailModal({
                     </div>
 
                     <div>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Google Drive Cloud Folder</div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Local Archive Folder</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
                         <code style={{ fontSize: '0.8rem', color: 'var(--accent-cyan)' }}>{detail.folder_name || detail.Folder || '—'}</code>
                         <button 
@@ -382,7 +382,7 @@ export default function ProposalDetailModal({
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
                             <span style={{ fontWeight: 700, fontSize: '1.05rem' }}>Inspection Report PDF</span>
                             <span className="doc-pill downloaded">
-                              Google Drive Verified
+                              Verified on Local Archive
                             </span>
                           </div>
 
@@ -406,7 +406,7 @@ export default function ProposalDetailModal({
                           </button>
                           <a 
                             className="icon-btn"
-                            title="Download PDF from Google Drive"
+                            title="Download PDF from the local archive"
                             href={api.getDocumentUrl(detail.folder_name, detail.inspection_report_file || 'Inspection Report.PDF', true)}
                             download
                           >
@@ -432,7 +432,7 @@ export default function ProposalDetailModal({
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
                             <span style={{ fontWeight: 700, fontSize: '1.05rem' }}>Proceeding Letter</span>
                             <span className="doc-pill downloaded">
-                              Google Drive Verified
+                              Verified on Local Archive
                             </span>
                           </div>
 
@@ -456,7 +456,7 @@ export default function ProposalDetailModal({
                           </button>
                           <a 
                             className="icon-btn"
-                            title="Download PDF from Google Drive"
+                            title="Download PDF from the local archive"
                             href={api.getDocumentUrl(detail.folder_name, detail.proceeding_letter_file || detail.proceeding_file || 'Proceeding_Letter.pdf', true)}
                             download
                           >
@@ -482,7 +482,7 @@ export default function ProposalDetailModal({
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
                             <span style={{ fontWeight: 700, fontSize: '1.05rem' }}>Approved Blueprint Drawing</span>
                             <span className="doc-pill downloaded">
-                              Google Drive Verified
+                              Verified on Local Archive
                             </span>
                           </div>
 
@@ -506,7 +506,7 @@ export default function ProposalDetailModal({
                           </button>
                           <a 
                             className="icon-btn"
-                            title="Download PDF from Google Drive"
+                            title="Download PDF from the local archive"
                             href={api.getDocumentUrl(detail.folder_name, detail.drawing_pdf_file || detail.drawing_file || 'Drawing.pdf', true)}
                             download
                           >

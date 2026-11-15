@@ -17,6 +17,7 @@ from config import (
     OC_BP_CSV_PATH, OC_BP_CSV_PATHS, HMDA_CSV_PATHS, HMDA_CSV_PATH,
     DOCUMENTS_CACHE_DIR, CACHE_DIR
 )
+from local_documents import local_documents, folder_metadata, folder_texts, doc_key, clean_text
 
 logger = logging.getLogger('tgbpass_site.data_provider')
 
@@ -126,25 +127,38 @@ def is_placeholder_search(term: str) -> bool:
     return False
 
 
-@lru_cache(maxsize=32768)
-def find_document_file(folder_name: str, filename: str) -> Optional[Path]:
-    """Exclusively finds and streams verified PDF documents from Google Drive."""
-    if not folder_name and not filename:
-        return None
-
-    clean_file = Path(filename).name if filename else ''
-    
-    # Exclusively retrieve from Google Drive (checks ./cache/documents/ first, then streams on demand)
+def _as_int(value, default: int) -> int:
+    """int() that tolerates blanks/garbage (e.g. folder-only records without a CSV row number)."""
     try:
-        from drive_manager import drive_manager
-        if drive_manager.is_connected():
-            cloud_doc = drive_manager.get_document_file(folder_name, clean_file or filename)
-            if cloud_doc and cloud_doc.exists() and cloud_doc.stat().st_size > 0:
-                return cloud_doc
-    except Exception as e:
-        logger.debug(f"Google Drive document fetch notice: {e}")
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
 
-    return None
+
+def find_document_file(folder_name: str, filename: str) -> Optional[Path]:
+    """Finds a proposal PDF on the local data disks (see local_documents.py)."""
+    if not folder_name:
+        return None
+    return local_documents.find(folder_name, filename or '')
+
+
+def _apply_local_documents(df: pd.DataFrame, kinds_to_columns: Dict[str, Tuple[str, str]]) -> pd.DataFrame:
+    """Sets each record's document status/filename columns from the PDFs actually on local disk.
+
+    kinds_to_columns maps a document kind ('proceeding', 'drawing', 'inspection') to its
+    (status column, filename column). folder_name is set to the matching local folder."""
+    if df.empty:
+        return df
+    folders = df['folder_name'] if 'folder_name' in df.columns else pd.Series('', index=df.index)
+    found = [local_documents.entry(fn, fo) for fn, fo in zip(df['file_number'], folders)]
+    df = df.copy()
+    df['folder_name'] = [e['folder'] if e else (fo or str(fn).replace('/', '_'))
+                         for e, fn, fo in zip(found, df['file_number'], folders)]
+    kinds = [local_documents.kinds(e['folder']) if e else {} for e in found]
+    for kind, (status_col, file_col) in kinds_to_columns.items():
+        df[status_col] = ['Downloaded' if kind in k else 'Not Available' for k in kinds]
+        df[file_col] = [k.get(kind, '') for k in kinds]
+    return df
 
 
 
@@ -243,16 +257,7 @@ class DataProvider:
         existing_csvs = [p for p in CSV_PATHS if p and p.exists() and p.is_file()]
 
         if not existing_csvs:
-            try:
-                from drive_manager import drive_manager
-                if drive_manager.is_connected():
-                    synced = drive_manager.sync_csv_file('all_proposals.csv')
-                    if synced and synced.exists():
-                        existing_csvs = [synced]
-            except Exception as e:
-                logger.warning(f"Could not auto-sync all_proposals.csv from Google Drive: {e}")
-
-            if not existing_csvs and self.check_mysql_connection():
+            if self.check_mysql_connection():
                 logger.info(f"CSV not found in CSV_PATHS. Auto-exporting from MySQL to {CSV_PATH}...")
                 self.export_mysql_to_csv()
                 if CSV_PATH.exists():
@@ -329,16 +334,42 @@ class DataProvider:
         if len(dfs) == 1:
             df = dfs[0]
         else:
-            df = dfs[0]
+            df = pd.concat(dfs, ignore_index=True, copy=False)
 
         # Filter out corrupt/blank header rows
         df = df[df['file_number'].str.strip() != '']
         df = df[~df['file_number'].str.strip().str.lower().isin(['not available', 'nan', 'none', 'null', 'file_no'])]
 
-        # Strict Google Drive filter: Only allow records with verified Google Drive files, remove remaining
-        has_proc_drive = df['proceeding_letter_status'] == 'Downloaded'
-        has_draw_drive = df['drawing_pdf_status'] == 'Downloaded'
-        df = df[has_proc_drive | has_draw_drive]
+        # Keep every proposal (including ones whose documents were never downloaded, so all
+        # archive folders are searchable), collapsing duplicate scrape rows to one per file number
+        # (preferring the row that reported documents).
+        df = df.copy()
+        df['file_number'] = df['file_number'].str.strip()
+        df['_doc_rank'] = ((df['proceeding_letter_status'] == 'Downloaded').astype(int)
+                           + (df['drawing_pdf_status'] == 'Downloaded').astype(int))
+        df = (df.sort_values('_doc_rank', ascending=False, kind='stable')
+                .drop_duplicates('file_number', keep='first')
+                .drop(columns=['_doc_rank']).sort_index())
+
+        # Proposal folders in the TG-bPASS download folders that are missing from every CSV.
+        known = set(df['file_number'].map(doc_key)) | set(df['folder_name'].map(doc_key))
+        extra = []
+        for e in local_documents.entries_under('downloaded_proposals'):
+            if doc_key(e['folder']) in known:
+                continue
+            meta = folder_metadata(e)
+            extra.append({'file_number': meta['file_number'], 'applicant_name': meta['applicant_name'],
+                          'architect_name': meta['architect_name'], 'folder_name': e['folder'],
+                          'processing_status': 'Completed', 'page_number': 0, 'row_number': 0})
+        if extra:
+            logger.info(f"Added {len(extra):,} TG-bPASS proposals found only as local folders.")
+            df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True).fillna('')
+
+        # Document availability comes from the PDFs actually on the local disks.
+        df = _apply_local_documents(df, {
+            'proceeding': ('proceeding_letter_status', 'proceeding_letter_file'),
+            'drawing': ('drawing_pdf_status', 'drawing_pdf_file'),
+        })
 
         # Precompute clean search index columns for fast vectorized filtering
         fn_lower = df['file_number'].astype(str).str.lower()
@@ -950,188 +981,158 @@ class DataProvider:
 
 
     # =========================================================================
-    # DPMS OC's & BP's DATASET METHODS (100% Google Drive Cloud Sourced)
+    # DPMS OC's & BP's DATASET METHODS (local data disks)
     # =========================================================================
 
     def load_hmda_layout_data(self, force_reload: bool = False) -> pd.DataFrame:
         """Loads and caches the HMDA Planning Layouts dataset from disk and CSV."""
         now = time.time()
         existing_lo_csvs = [p for p in HMDA_CSV_PATHS if p and p.exists() and p.is_file()]
-        if not existing_lo_csvs:
-            try:
-                from drive_manager import drive_manager
-                if drive_manager.is_connected():
-                    synced = drive_manager.sync_csv_file('HMDA_LO_Data.csv')
-                    if synced and synced.exists():
-                        existing_lo_csvs = [synced]
-            except Exception as e:
-                logger.warning(f"Could not auto-sync HMDA_LO_Data.csv from Google Drive: {e}")
-
-        hmda_root = DOCUMENTS_CACHE_DIR
-
-        if not existing_lo_csvs and not (hmda_root.exists() and hmda_root.is_dir()):
-            return pd.DataFrame()
 
         current_mtimes = tuple((str(p), p.stat().st_mtime) for p in existing_lo_csvs)
         if not force_reload and self._hmda_df is not None and self._hmda_mtimes == current_mtimes:
             return self._hmda_df
 
         records = []
-        seen_files = set()
+        seen = set()  # doc_key of every listed file number and folder
 
-        hmda_cloud_folders = {}
-        try:
-            from drive_manager import drive_manager
-            if drive_manager.is_connected():
-                hmda_cloud_folders = drive_manager.get_hmda_downloaded_data()
-        except Exception:
-            pass
+        def clean_fn(raw: str) -> str:
+            """'Letter No.151122/LO/PLG/HMDA/2022 dt. 12.01.2023' -> '151122/LO/PLG/HMDA/2022',
+            '14872 /MP2/HUDA/ 1998' -> '14872/MP2/HUDA/1998'; dash-separated numbers are kept as-is."""
+            s = re.sub(r'\s*/\s*', '/', clean_text(raw)).strip(' ,;"\'')
+            m = re.search(r'\d[\w.-]*(?:/+[\w.-]+)+', s)  # '/+': some numbers contain '//' (31/LO//ZO1/...)
+            return m.group(0).rstrip('.,-') if m else s
 
-        # 1. Load from HMDA CSVs (HMDA_LO_Data.csv and HMDA_DPMS_All_Proposals.csv)
+        def is_file_number(fn: str) -> bool:
+            """Real layout numbers ('7804/Plg/HMDA/2008', '025956-SKP-LT-U6-HMDA-17072019'), not
+            scraper placeholders ('ROW_1898', '4561', '&nbsp;')."""
+            return bool(re.search(r'\d', fn)) and (fn.count('/') >= 2 or fn.count('-') >= 3)
+
+        def add_record(fn, folder, meta, source_text=''):
+            """Appends one layout record; document availability = PDFs in its local folder."""
+            entry = local_documents.entry(folder) or local_documents.entry(fn)
+            own = local_documents.entry(fn)
+            if entry and own and entry is not own:
+                # The row's folder is a separate case of the same number, e.g.
+                # 301472_LO_Plg_HMDA_2016_Draft_layout_is_cancelled next to 301472_LO_PLG_HMDA_2016
+                # (different PDFs). Keep both: this one is listed as '<number> (Draft layout is cancelled)'.
+                tail = clean_text(entry['folder']).split('_')[len(re.split(r'[/-]+', fn)):]
+                fn = f"{fn} ({' '.join(tail)})" if tail else fn
+            kinds = local_documents.kinds(entry['folder']) if entry else {}
+            has_proc, has_plan, has_insp = 'proceeding' in kinds, 'drawing' in kinds, 'inspection' in kinds
+            seen.update({doc_key(fn), doc_key(folder)} | ({doc_key(entry['folder'])} if entry else set()))
+            records.append({
+                'file_number': fn,
+                'applicant_name': meta.get('applicant', ''),
+                'village': meta.get('village', ''),
+                'extent': meta.get('extent', ''),
+                'draft_layout_issued': meta.get('draft', ''),
+                'layout_issued': meta.get('issued', ''),
+                'remarks': meta.get('remarks', ''),
+                'folder_name': entry['folder'] if entry else folder,
+                'folder_path': '',
+                'architect_name': meta.get('architect', ''),
+                'officer_name': meta.get('officer', ''),
+                # keeps the full letter text (e.g. 'Letter No.151122/... dt. 12.01.2023') searchable
+                'permit_number': meta.get('permit', '') or (source_text if doc_key(source_text) != doc_key(fn) else ''),
+                'project_type': meta.get('project_type') or 'Layout Permission (LO)',
+                'case_type': meta.get('case_type') or 'Approved Layout',
+                'proceeding_letter_file': kinds.get('proceeding', ''),
+                'drawing_pdf_file': kinds.get('drawing', ''),
+                'inspection_report_file': kinds.get('inspection', ''),
+                'proceeding_letter_status': 'Downloaded' if has_proc else 'Not Available',
+                'drawing_pdf_status': 'Downloaded' if has_plan else 'Not Available',
+                'inspection_report_status': 'Downloaded' if has_insp else 'Not Available',
+                'has_proc_disk': has_proc,
+                'has_draw_disk': has_plan,
+                'has_inspection_disk': has_insp,
+                'processing_status': ('Completed' if has_proc and has_plan else
+                                      'Partially Completed' if (has_proc or has_plan or has_insp) else 'Not Available'),
+            })
+
+        # 1. HMDA CSVs. Rows of the layout lists (HMDA_LO_Data.csv) are all listed, with or without
+        #    PDFs; rows of other HMDA CSVs (e.g. the 60k-row DPMS export) only when a local PDF exists.
         for lo_csv in existing_lo_csvs:
+            list_all = 'lo_data' in lo_csv.name.lower()
             try:
-                raw_df = pd.read_csv(lo_csv, dtype=str).fillna('')
-                # Standardize column names lowercase lookup
+                raw_df = pd.read_csv(lo_csv, dtype=str, keep_default_na=False).fillna('')
                 raw_cols = {c.strip().lower(): c for c in raw_df.columns}
 
-                def _g(keys, default=''):
-                    for k in keys:
-                        if k in raw_cols:
-                            return raw_df[raw_cols[k]].astype(str).str.strip()
-                    return pd.Series([default] * len(raw_df))
+                def _g(keys):
+                    col = next((raw_cols[k] for k in keys if k in raw_cols), None)
+                    return raw_df[col].map(clean_text) if col else pd.Series('', index=raw_df.index)
 
-                file_nos = _g(['file_no', 'file_number', 'fileno'])
-                names = _g(['owner_applicant', 'name', 'applicant_name', 'owner_name'])
-                architects = _g(['architect_engineer_surveyor', 'architect_se_name', 'architect_name', 'architect'])
-                officers = _g(['officer_name', 'officer'])
-                villages = _g(['village', 'village_synos', 'survey_no', 'office'])
-                extents = _g(['extent', 'area'])
-                draft_issued = _g(['draft_layout_issued', 'extracted_at', 'site_inspection_on'])
-                lo_issued = _g(['layout_issued'])
-                folders = _g(['folder_name', 'folder'])
-                proc_stats = _g(['view_proceeding_action', 'proceedings_status', 'proceeding_status'])
-                plan_stats = _g(['view_drawing_action', 'plan_status', 'drawing_status'])
-                remarks = _g(['remarks', 'overall_status'])
-                project_types = _g(['project_type'])
-                case_types = _g(['case_type'])
-                permits = _g(['permit_number', 'permit_no', 'proposal_id'])
-
-                for idx in range(len(raw_df)):
-                    fn = file_nos.iloc[idx].strip()
-                    if not fn or fn.lower() in ('not available', 'nan', 'none', 'file_no'):
+                cols = {
+                    'fn': _g(['file_no', 'file_number', 'fileno']),
+                    'folder': _g(['folder_name', 'folder']),
+                    'applicant': _g(['owner_applicant', 'name', 'applicant_name', 'owner_name']),
+                    'architect': _g(['architect_engineer_surveyor', 'architect_se_name', 'architect_name', 'architect']),
+                    'officer': _g(['officer_name', 'officer']),
+                    'village': _g(['village', 'village_synos', 'survey_no', 'office']),
+                    'extent': _g(['extent', 'area']),
+                    'draft': _g(['draft_layout_issued', 'extracted_at', 'site_inspection_on']),
+                    'issued': _g(['layout_issued']),
+                    'remarks': _g(['remarks', 'overall_status']),
+                    'project_type': _g(['project_type']),
+                    'case_type': _g(['case_type']),
+                    'permit': _g(['permit_number', 'permit_no', 'proposal_id']),
+                }
+                rows = pd.DataFrame(cols)
+                rows['fn_clean'] = rows['fn'].map(clean_fn)
+                rows = rows[rows['fn_clean'].map(is_file_number)]
+                rows['folder'] = [fo or fn.replace('/', '_') for fo, fn in zip(rows['folder'], rows['fn_clean'])]
+                rows['has_docs'] = [bool(local_documents.entry(fo, fn)) for fo, fn in zip(rows['folder'], rows['fn_clean'])]
+                if not list_all:
+                    rows = rows[rows['has_docs']]
+                # one record per file number, preferring a row whose folder has PDFs, then the
+                # usual '/' spelling over the '-' one ('008461/SKP/LT/...' vs '008461-SKP-LT-...')
+                rows['has_slash'] = rows['fn_clean'].str.contains('/')
+                rows = rows.sort_values(['has_docs', 'has_slash'], ascending=False, kind='stable')
+                for r in rows.to_dict('records'):
+                    if doc_key(r['fn_clean']) in seen:
                         continue
-                    if fn in seen_files:
-                        continue
-                    seen_files.add(fn)
-
-                    f_name = folders.iloc[idx].strip()
-                    if not f_name and fn:
-                        f_name = fn.replace('/', '_')
-
-                    applicant = names.iloc[idx].strip()
-                    architect = architects.iloc[idx].strip()
-                    officer = officers.iloc[idx].strip()
-                    v_synos = villages.iloc[idx].strip()
-                    ext = extents.iloc[idx].strip()
-                    draft_dt = draft_issued.iloc[idx].strip()
-                    lo_dt = lo_issued.iloc[idx].strip()
-                    rem = remarks.iloc[idx].strip()
-                    pt = project_types.iloc[idx].strip()
-                    ct = case_types.iloc[idx].strip()
-                    p_no = permits.iloc[idx].strip()
-                    
-                    p_stat = proc_stats.iloc[idx].strip()
-                    d_stat = plan_stats.iloc[idx].strip()
-
-                    is_layout = 'layout' in pt.lower() or 'lo' in fn.lower()
-                    proc_file_name = 'Proceedings.pdf' if is_layout else 'Proceeding.pdf'
-                    plan_file_name = 'Plan.pdf' if is_layout else 'Drawing.pdf'
-
-                    # Check presence in Google Drive HMDA downloaded manifest
-                    cloud_info = hmda_cloud_folders.get(f_name) or hmda_cloud_folders.get(fn.replace('/', '_'))
-                    proc_in_cloud = bool(cloud_info.get('proceeding', False)) if cloud_info else False
-                    plan_in_cloud = bool(cloud_info.get('drawing', False)) if cloud_info else False
-
-                    has_proc = proc_in_cloud or ('download' in p_stat.lower())
-                    has_plan = plan_in_cloud or ('download' in d_stat.lower())
-
-                    # Strict Google Drive filter: Only allow records with verified Google Drive files, remove remaining
-                    if not (has_proc or has_plan):
-                        continue
-
-                    processing_status = 'Completed' if (has_proc and has_plan) else 'Partially Completed'
-
-                    records.append({
-                        'file_number': fn,
-                        'applicant_name': applicant,
-                        'village': v_synos,
-                        'extent': ext,
-                        'draft_layout_issued': draft_dt,
-                        'layout_issued': lo_dt,
-                        'remarks': rem,
-                        'folder_name': f_name,
-                        'folder_path': '',
-                        'architect_name': architect,
-                        'officer_name': officer,
-                        'permit_number': p_no,
-                        'project_type': pt or ('Layout Permission (LO)' if is_layout else 'Building Permission'),
-                        'case_type': ct or ('Draft Layout' if is_layout else 'New'),
-                        'proceeding_letter_file': proc_file_name,
-                        'drawing_pdf_file': plan_file_name,
-                        'inspection_report_file': '',
-                        'proceeding_letter_status': 'Downloaded' if has_proc else 'Not Available',
-                        'drawing_pdf_status': 'Downloaded' if has_plan else 'Not Available',
-                        'inspection_report_status': 'Not Available',
-                        'has_proc_disk': has_proc,
-                        'has_draw_disk': has_plan,
-                        'has_inspection_disk': False,
-                        'processing_status': processing_status
-                    })
+                    add_record(r['fn_clean'], r['folder'], r, source_text=r['fn'])
             except Exception as e:
                 logger.error(f"Error loading HMDA CSV {lo_csv}: {e}")
 
-        # 2. Also register any Google Drive downloaded HMDA folders not yet indexed in records
-        seen_folders = {str(r.get('folder_name', '')).strip() for r in records if r.get('folder_name')}
-        for f_name, cloud_info in hmda_cloud_folders.items():
-            if f_name in seen_folders:
-                continue
-            seen_folders.add(f_name)
-            fn = f_name.replace('_', '/')
-            if fn in seen_files:
-                continue
-            seen_files.add(fn)
+        # 2. Every layout folder in the layout data folders (next to HMDA_LO_Data.csv), PDFs or not.
+        layout_dirs = {p.parent for p in existing_lo_csvs if 'lo_data' in p.name.lower() and p.parent != CACHE_DIR}
+        for layout_dir in sorted(layout_dirs):
+            for d in sorted(os.scandir(layout_dir), key=lambda d: d.name):
+                if not d.is_dir():
+                    continue
+                t = folder_texts(d.path)
+                fn = clean_fn(t.get('file_no', '')) or clean_text(d.name).replace('_', '/')
+                if doc_key(fn) in seen or doc_key(d.name) in seen:
+                    continue
+                na = lambda v: '' if v.upper() in ('NOT_AVAILABLE', 'N/A', 'NA') else v  # noqa: E731
+                if not is_file_number(fn):
+                    # Placeholder folders (ROW_1240, '&nbsp;', test rows) are kept only when they hold a
+                    # real layout, i.e. a proper applicant name; the folder name is used as its reference.
+                    applicant = na(t.get('name', ''))
+                    if not (' ' in applicant and len(applicant) > 5):
+                        continue
+                    fn = clean_text(d.name)
+                add_record(fn, d.name, {
+                    'applicant': na(t.get('name', '')), 'village': na(t.get('village_synos', '')),
+                    'extent': na(t.get('extent', '')), 'draft': na(t.get('draft_layout_issued', '')),
+                    'issued': na(t.get('layout_issued', '')), 'remarks': na(t.get('remarks', '')),
+                }, source_text=t.get('file_no', ''))
 
-            has_proc = bool(cloud_info.get('proceeding', False))
-            has_plan = bool(cloud_info.get('drawing', False))
-            if not (has_proc or has_plan):
+        # 3. Layout-named folders with PDFs elsewhere on the disks (e.g. 101884_LO_PLG_HMDA_2014 among
+        #    the OC/BP folders). TG-bPASS's own LO files in its download folders belong to TG-bPASS.
+        layout_name = re.compile(r'(^|_)(LO|LT)(_|$).*HMDA|HMDA.*(^|_)(LO|LT)(_|$)', re.I)
+        tg_folders = {e['folder'] for e in local_documents.entries_under('downloaded_proposals')}
+        for e in list(local_documents.load().values()):
+            if not layout_name.search(e['folder']) or e['folder'] in tg_folders or doc_key(e['folder']) in seen:
                 continue
-
-            records.append({
-                'file_number': fn,
-                'applicant_name': '',
-                'village': '',
-                'extent': '',
-                'draft_layout_issued': '',
-                'layout_issued': '',
-                'remarks': 'Google Drive Cloud Asset',
-                'folder_name': f_name,
-                'folder_path': '',
-                'architect_name': '',
-                'permit_number': '',
-                'project_type': 'HMDA Planning Permission',
-                'case_type': 'Approved Layout',
-                'proceeding_letter_file': 'Proceeding.pdf',
-                'drawing_pdf_file': 'Drawing.pdf',
-                'inspection_report_file': '',
-                'proceeding_letter_status': 'Downloaded' if has_proc else 'Not Available',
-                'drawing_pdf_status': 'Downloaded' if has_plan else 'Not Available',
-                'inspection_report_status': 'Not Available',
-                'has_proc_disk': has_proc,
-                'has_draw_disk': has_plan,
-                'has_inspection_disk': False,
-                'processing_status': 'Completed' if (has_proc and has_plan) else 'Partially Completed'
+            meta = folder_metadata(e)
+            if doc_key(meta['file_number']) in seen:
+                continue
+            add_record(meta['file_number'], e['folder'], {
+                'applicant': meta['applicant_name'], 'architect': meta['architect_name'],
+                'village': meta['village'], 'extent': meta['extent'], 'remarks': 'Local layout folder',
             })
-
 
         if not records:
             return pd.DataFrame()
@@ -1158,7 +1159,7 @@ class DataProvider:
         self._hmda_df = df
         self._hmda_mtimes = current_mtimes
         self._hmda_last_loaded = now
-        logger.info(f"Loaded {len(df):,} HMDA Layout records from Google Drive cloud manifest.")
+        logger.info(f"Loaded {len(df):,} HMDA Layout records from local folders.")
         return self._hmda_df
 
     def load_oc_bp_data(self, force_reload: bool = False) -> pd.DataFrame:
@@ -1167,17 +1168,7 @@ class DataProvider:
         # Exclude HMDA Layout CSVs from DPMS loader so DPMS has pure Building Permissions & Occupancy Certificates
         existing_oc_csvs = [p for p in OC_BP_CSV_PATHS if p and p.exists() and p.is_file() and 'hmda' not in p.name.lower() and 'layout' not in p.name.lower()]
         if not existing_oc_csvs:
-            try:
-                from drive_manager import drive_manager
-                if drive_manager.is_connected():
-                    synced = drive_manager.sync_csv_file('All-for-OC_s-_-BP_s.csv')
-                    if synced and synced.exists():
-                        existing_oc_csvs = [synced]
-            except Exception as e:
-                logger.warning(f"Could not auto-sync All-for-OC_s-_-BP_s.csv from Google Drive: {e}")
-
-        if not existing_oc_csvs:
-            logger.warning("No DPMS OC & BP dataset found in Google Drive cache.")
+            logger.warning(f"No DPMS OC & BP CSVs found in {OC_BP_CSV_PATHS}.")
             return pd.DataFrame()
 
         current_mtimes = tuple((str(p), p.stat().st_mtime) for p in existing_oc_csvs)
@@ -1241,56 +1232,6 @@ class DataProvider:
                 # Pure DPMS: Exclude HMDA Layout letters so vaults remain clean
                 df_item = df_item[~df_item['file_number'].str.contains('HMDA|/LO/|-LO', regex=True, case=False)]
 
-                df_item['drawing_pdf_status'] = df_item.get('drawing_pdf_status', '').apply(
-                    lambda x: 'Downloaded' if 'download' in str(x).lower() else 'Not Available'
-                )
-                df_item['proceeding_letter_status'] = df_item.get('proceeding_letter_status', '').apply(
-                    lambda x: 'Downloaded' if 'download' in str(x).lower() else 'Not Available'
-                )
-
-                # Check Google Drive progress records
-                try:
-                    from drive_manager import drive_manager
-                    if drive_manager.is_connected():
-                        prog = drive_manager.get_progress_data()
-                        if prog:
-                            cloud_proc_fns = {k for k, v in prog.items() if v.get('proceeding_letter') or v.get('proceeding_letter_link')}
-                            cloud_proc_keys = {k.replace('/', '_') for k in cloud_proc_fns}
-                            mask_cloud = df_item['file_number'].isin(cloud_proc_fns) | df_item['folder_name'].isin(cloud_proc_keys)
-                            df_item.loc[mask_cloud, 'proceeding_letter_status'] = 'Downloaded'
-
-                            cloud_draw_fns = {k for k, v in prog.items() if v.get('drawing') or v.get('drawing_link')}
-                            cloud_draw_keys = {k.replace('/', '_') for k in cloud_draw_fns}
-                            mask_draw = df_item['file_number'].isin(cloud_draw_fns) | df_item['folder_name'].isin(cloud_draw_keys)
-                            df_item.loc[mask_draw, 'drawing_pdf_status'] = 'Downloaded'
-                except Exception as e:
-                    logger.debug(f"Google Drive progress status check notice: {e}")
-
-                df_item['inspection_report_status'] = df_item.get('inspection_report_file', '').apply(
-                    lambda x: 'Downloaded' if str(x).strip() and str(x).strip().lower() != 'not_available' else 'Not Available'
-                )
-
-                # Strict Google Drive filter: Only keep records that have verified Google Drive files, remove remaining
-                is_d = df_item['drawing_pdf_status'] == 'Downloaded'
-                is_p = df_item['proceeding_letter_status'] == 'Downloaded'
-                is_i = df_item['inspection_report_status'] == 'Downloaded'
-                df_item = df_item[is_d | is_p | is_i]
-
-                cond_completed = is_d & (is_p | is_i)
-                cond_partial = (is_d | is_p | is_i) & ~cond_completed
-
-                proc_status_series = pd.Series('Partially Completed', index=df_item.index)
-                proc_status_series[cond_completed] = 'Completed'
-                df_item['processing_status'] = proc_status_series
-                df_item['has_draw_disk'] = df_item['drawing_pdf_status'] == 'Downloaded'
-                df_item['has_proc_disk'] = df_item['proceeding_letter_status'] == 'Downloaded'
-                df_item['has_inspection_disk'] = df_item['inspection_report_status'] == 'Downloaded'
-
-                df_item['drawing_file'] = df_item.get('drawing_pdf_file', 'Drawing.pdf')
-                df_item['proceeding_file'] = df_item.get('proceeding_letter_file', 'Proceeding.pdf')
-                df_item['drawing_status'] = df_item['drawing_pdf_status']
-                df_item['proceeding_status'] = df_item['proceeding_letter_status']
-
                 dfs.append(df_item)
 
             except Exception as e:
@@ -1300,7 +1241,48 @@ class DataProvider:
             return pd.DataFrame()
 
         df = pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
-        df = df.drop_duplicates(subset=['file_number'], keep='first')
+        df = df.drop_duplicates(subset=['file_number'], keep='first').fillna('')
+
+        # Proposal folders in the OC/BP download folders that are missing from every CSV
+        # (e.g. the GHMC proceeding collector's "new" / "DATA" folders, which hold only Proceeding.pdf).
+        known = set(df['file_number'].map(doc_key))
+        if 'folder_name' in df.columns:
+            known |= set(df['folder_name'].map(doc_key))
+        extra = []
+        for e in local_documents.entries_under("oc's & bp's", f"{os.sep}ghmc{os.sep}data{os.sep}"):
+            if doc_key(e['folder']) in known or re.search(r'HMDA|(^|_)(LO|LT)(_|$)', e['folder'], re.I):
+                continue
+            known.add(doc_key(e['folder']))
+            meta = folder_metadata(e)
+            extra.append({'file_number': meta['file_number'], 'applicant_name': meta['applicant_name'],
+                          'architect_name': meta['architect_name'], 'case_type': meta['case_type'],
+                          'project_type': meta['project_type'], 'designation': meta['designation'],
+                          'village': meta['village'], 'folder_name': e['folder']})
+        if extra:
+            logger.info(f"Added {len(extra):,} OC/BP proposals found only as local folders.")
+            df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True).fillna('')
+
+        # Document availability comes from the PDFs actually on the local disks; only proposals
+        # with at least one local document are listed in this vault.
+        df = _apply_local_documents(df, {
+            'proceeding': ('proceeding_letter_status', 'proceeding_letter_file'),
+            'drawing': ('drawing_pdf_status', 'drawing_pdf_file'),
+            'inspection': ('inspection_report_status', 'inspection_report_file'),
+        })
+        is_d = df['drawing_pdf_status'] == 'Downloaded'
+        is_p = df['proceeding_letter_status'] == 'Downloaded'
+        is_i = df['inspection_report_status'] == 'Downloaded'
+        df = df[is_d | is_p | is_i].copy()
+        is_d, is_p, is_i = is_d[df.index], is_p[df.index], is_i[df.index]
+        df['processing_status'] = 'Partially Completed'
+        df.loc[is_d & (is_p | is_i), 'processing_status'] = 'Completed'
+        df['has_draw_disk'] = is_d
+        df['has_proc_disk'] = is_p
+        df['has_inspection_disk'] = is_i
+        df['drawing_file'] = df['drawing_pdf_file']
+        df['proceeding_file'] = df['proceeding_letter_file']
+        df['drawing_status'] = df['drawing_pdf_status']
+        df['proceeding_status'] = df['proceeding_letter_status']
         fn_lower = df['file_number'].astype(str).str.lower()
         pn_lower = df['permit_number'].astype(str).str.lower() if 'permit_number' in df.columns else pd.Series('', index=df.index)
         app_lower = df['applicant_name'].astype(str).str.lower() if 'applicant_name' in df.columns else pd.Series('', index=df.index)
@@ -1615,7 +1597,7 @@ class DataProvider:
             'source_dataset': 'oc_bp',
             'source_label': source_label,
             'source_badge_color': source_badge_color,
-            'row_number': int(r.get('row_number', fallback_idx + 1)),
+            'row_number': _as_int(r.get('row_number'), fallback_idx + 1),
             'file_number': str(r.get('file_number', '') or ''),
             'permit_number': str(r.get('permit_number', '') or ''),
             'applicant_name': str(r.get('applicant_name', '') or ''),
@@ -1657,7 +1639,7 @@ class DataProvider:
             'source_dataset': 'tgbpass',
             'source_label': 'TG-bPASS Archive',
             'source_badge_color': 'sky',
-            'row_number': int(r.get('row_number', fallback_idx + 1)),
+            'row_number': _as_int(r.get('row_number'), fallback_idx + 1),
             'file_number': file_no,
             'permit_number': '',
             'applicant_name': str(r.get('applicant_name', '') or ''),
@@ -1702,7 +1684,7 @@ class DataProvider:
             'source_dataset': 'hmda',
             'source_label': source_label,
             'source_badge_color': source_badge_color,
-            'row_number': int(r.get('row_number', fallback_idx + 1)),
+            'row_number': _as_int(r.get('row_number'), fallback_idx + 1),
             'file_number': str(r.get('file_number', '') or ''),
             'permit_number': str(r.get('permit_number', '') or ''),
             'applicant_name': str(r.get('applicant_name', '') or ''),
@@ -1896,7 +1878,7 @@ class DataProvider:
         clean_proc_name = proc_file or ('Proceedings.pdf' if is_layout else 'Proceeding_Letter.pdf')
         doc_type = "HMDA Layout Proceedings" if is_layout else ("Proceeding Letter" if dataset == 'tgbpass' else "Proceeding Order")
         
-        # 1. Proceeding Letter / Order - ONLY ALLOW IF VERIFIED IN GOOGLE DRIVE
+        # 1. Proceeding Letter / Order - only when the PDF exists locally
         if has_proc:
             files.append({
                 'file_id': f"{dataset}-{ref_no}-{clean_proc_name}",
@@ -1906,7 +1888,7 @@ class DataProvider:
                 'doc_name': clean_proc_name,
                 'date': date_val,
                 'status': 'Available',
-                'storage': 'Google Drive Cloud Storage',
+                'storage': 'Local Archive',
                 'snippet': snippet,
                 'match_priority': priority,
                 'folder_name': folder,
@@ -1920,7 +1902,7 @@ class DataProvider:
                 'download_url': f"/api/document/{folder}/{clean_proc_name}?download=1"
             })
 
-        # 2. Building Plan / Approved Drawing - ONLY ALLOW IF VERIFIED IN GOOGLE DRIVE
+        # 2. Building Plan / Approved Drawing - only when the PDF exists locally
         draw_file = r.get('drawing_pdf_file', '')
         draw_stat = r.get('drawing_pdf_status', 'Not Available')
         has_draw = bool(r.get('has_draw_disk') or (draw_stat == 'Downloaded'))
@@ -1935,7 +1917,7 @@ class DataProvider:
                 'doc_name': clean_draw_name,
                 'date': date_val,
                 'status': 'Available',
-                'storage': 'Google Drive Cloud Storage',
+                'storage': 'Local Archive',
                 'snippet': snippet,
                 'match_priority': priority,
                 'folder_name': folder,
@@ -1949,7 +1931,7 @@ class DataProvider:
                 'download_url': f"/api/document/{folder}/{clean_draw_name}?download=1"
             })
 
-        # 3. Site Inspection Report (for DPMS OC & BP) - ONLY ALLOW IF VERIFIED IN GOOGLE DRIVE
+        # 3. Site Inspection Report (for DPMS OC & BP) - only when the PDF exists locally
         if dataset == 'oc_bp':
             insp_file = r.get('inspection_report_file', '')
             insp_stat = r.get('inspection_report_status', 'Not Available')
@@ -1965,7 +1947,7 @@ class DataProvider:
                     'doc_name': clean_insp_name,
                     'date': r.get('site_inspection_on', ''),
                     'status': 'Available',
-                    'storage': 'Google Drive Cloud Storage',
+                    'storage': 'Local Archive',
                     'snippet': insp_snippet,
                     'match_priority': priority,
                     'folder_name': folder,
@@ -2136,11 +2118,9 @@ class DataProvider:
                 norm = normalizer(r, idx)
                 rec_k = f"{ds_name}_{norm['file_number']}"
                 if rec_k not in seen_rec_keys:
+                    # Proposals without downloaded documents are still returned as records
+                    # (they just contribute no files), matching the static in-browser search.
                     rec_files = self.extract_record_files(norm, s_clean)
-                    # ONLY ALLOW PROPOSALS WITH VERIFIED GOOGLE DRIVE FILES - REMAINING REMOVE
-                    if not rec_files:
-                        continue
-
                     seen_rec_keys.add(rec_k)
                     norm['match_priority'] = 1 if has_exact_full_match else self.calculate_match_priority(norm, s_clean)
                     matched_records.append(norm)

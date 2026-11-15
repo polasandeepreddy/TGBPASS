@@ -62,6 +62,11 @@ export const api = {
     }
   },
 
+  // Public homepage totals come from the static archive manifest (no backend call needed).
+  async getPublicStats() {
+    return staticStats();
+  },
+
   // Unified multi-dataset omni-search (TG-bPASS 86.5k + DPMS OC's & BP's 169)
   async getUnifiedSearch(params = {}) {
     const query = new URLSearchParams();
@@ -277,6 +282,70 @@ export const api = {
     const json = await readJson(res);
     if (!res.ok) throw new Error(json.error || 'Sync failed');
     return json;
+  },
+
+  // --- Donations (voluntary one-time UPI) ---
+
+  async createDonation(payload) {
+    const res = await fetch(`${API_BASE}/donations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const json = await readJson(res);
+    if (!res.ok) throw new Error(json.error || 'Could not start donation');
+    return json.data;
+  },
+
+  async confirmDonation(ref, utr = '') {
+    const res = await fetch(`${API_BASE}/donations/${encodeURIComponent(ref)}/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ utr })
+    });
+    const json = await readJson(res);
+    if (!res.ok) throw new Error(json.error || 'Could not record confirmation');
+    return json.data;
+  },
+
+  async getDonationStatus(ref) {
+    const res = await fetch(`${API_BASE}/donations/${encodeURIComponent(ref)}`);
+    const json = await readJson(res);
+    if (!res.ok) throw new Error(json.error || 'Donation not found');
+    return json.data;
+  },
+
+  async getAdminDonations(status = '') {
+    const res = await fetch(`${API_BASE}/admin/donations${status ? `?status=${status}` : ''}`, {
+      headers: this.getAuthHeaders()
+    });
+    const json = await readJson(res);
+    if (!res.ok) throw new Error(json.error || 'Failed to load donations');
+    return json.data;
+  },
+
+  async verifyDonation(ref) {
+    const res = await fetch(`${API_BASE}/admin/donations/${encodeURIComponent(ref)}/verify`, {
+      method: 'POST',
+      headers: this.getAuthHeaders()
+    });
+    const json = await readJson(res);
+    if (!res.ok) throw new Error(json.error || 'Failed to verify donation');
+    return json.data;
+  },
+
+  /** Downloads the donations CSV (opens in Excel) using the admin header, not a URL token. */
+  async downloadDonationsCsv(status = '') {
+    const res = await fetch(`${API_BASE}/admin/donations/export${status ? `?status=${status}` : ''}`, {
+      headers: this.getAuthHeaders()
+    });
+    if (!res.ok) throw new Error('Export failed');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'donations.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
   },
 
   // Fetch scraper live status & logs

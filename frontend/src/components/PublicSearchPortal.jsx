@@ -30,6 +30,14 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 
+// "2026-10-06 13:26:16" -> "06 Oct 2026"; bare years ("2010") pass through unchanged.
+const formatDate = (d) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || '');
+  if (!m) return d;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${m[3]} ${months[Number(m[2]) - 1] || m[2]} ${m[1]}`;
+};
+
 export default function PublicSearchPortal({
   onOpenPdf,
   onSelectProposal,
@@ -80,8 +88,10 @@ export default function PublicSearchPortal({
   useEffect(() => {
     const loadGlobalStats = async () => {
       try {
-        const stats = await api.getStats('csv');
+        const stats = await api.getPublicStats();
         setGlobalStats(stats);
+        const t = stats.proposals_total || 0, o = stats.oc_bp_total || 0, h = stats.hmda_total || 0;
+        if (t + o + h > 0) setCounts({ all: t + o + h, tgbpass: t, oc_bp: o, hmda: h });
       } catch (err) {
         console.warn('Failed to load global overview stats:', err);
       }
@@ -115,11 +125,10 @@ export default function PublicSearchPortal({
       setRelatedFiles(data.files || []);
       setTotalFiles(data.total_files || 0);
       setProposals(data.records || []);
+      // Matches with no downloaded documents only appear under Applications, so show that tab.
+      if (!(data.files || []).length && (data.records || []).length) setActiveView('records');
       setTotalRecords(data.total_records || 0);
       setTotalPages(data.total_pages || 1);
-      if (data.counts) {
-        setCounts(data.counts);
-      }
     } catch (err) {
       console.error('Failed to load public search results:', err);
       setRelatedFiles([]);
@@ -389,128 +398,7 @@ export default function PublicSearchPortal({
       </div>
 
       {/* 1. When NOT searched yet: Clean Guidance & Repository Overview */}
-      {!hasSearched ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
-          {/* 3 Step Guidance Cards */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '18px'
-          }}>
-            <div className="glass-card" style={{ padding: '24px', textAlign: 'center' }}>
-              <div style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '12px',
-                background: '#e0f2fe',
-                color: '#0284c7',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 14px'
-              }}>
-                <FileText size={24} />
-              </div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '6px' }}>1. Enter File / Permit Number</h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                Type an official Proposal File Number (e.g. <code>000483/GHMC/...</code>), Temporary No, Permit No, or Applicant Name in the search box above.
-              </p>
-            </div>
-
-            <div className="glass-card" style={{ padding: '24px', textAlign: 'center' }}>
-              <div style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '12px',
-                background: '#ecfdf5',
-                color: '#059669',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 14px'
-              }}>
-                <ShieldCheck size={24} />
-              </div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '6px' }}>2. Instant Archive Verification</h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                Click Search to verify if the file is registered and active across <strong>172,197+</strong> unified Telangana building authority records.
-              </p>
-            </div>
-
-            <div className="glass-card" style={{ padding: '24px', textAlign: 'center' }}>
-              <div style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '12px',
-                background: '#f5f3ff',
-                color: '#7c3aed',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 14px'
-              }}>
-                <FileSpreadsheet size={24} />
-              </div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '6px' }}>3. Certified PDF Availability</h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                Immediately check whether official <strong>Proceeding Letters</strong>, certified <strong>Drawing Blueprints</strong>, and <strong>Site Inspection Reports</strong> are available to view and download.
-              </p>
-            </div>
-          </div>
-
-          {/* Dataset Coverage Cards */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-            gap: '18px'
-          }}>
-            <div className="glass-card" style={{ padding: '22px', borderLeft: '4px solid #0284c7' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                <div style={{ padding: '8px', borderRadius: '8px', background: '#f0f9ff', color: '#0284c7' }}>
-                  <Layers size={20} />
-                </div>
-                <div>
-                  <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>TG-bPASS Master Archive</h4>
-                  <span style={{ fontSize: '0.78rem', color: '#0284c7', fontWeight: 700 }}>{(85598).toLocaleString()}+ Verified Applications</span>
-                </div>
-              </div>
-              <p style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                Building permissions, layouts, and occupancy certificates across GHMC, HMDA, DTCP, GWMC, and all Telangana ULBs with Proceeding Letters and Drawing Blueprints.
-              </p>
-            </div>
-
-            <div className="glass-card" style={{ padding: '22px', borderLeft: '4px solid #7c3aed' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                <div style={{ padding: '8px', borderRadius: '8px', background: '#faf5ff', color: '#7c3aed' }}>
-                  <Building2 size={20} />
-                </div>
-                <div>
-                  <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>DPMS OC's & BP's Archive</h4>
-                  <span style={{ fontSize: '0.78rem', color: '#7c3aed', fontWeight: 700 }}>{(75942).toLocaleString()}+ Inspected Records</span>
-                </div>
-              </div>
-              <p style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                Historical Occupancy Certificates and Building Permissions archive featuring certified site inspection reports, inspector names, designations, and blueprints.
-              </p>
-            </div>
-
-            <div className="glass-card" style={{ padding: '22px', borderLeft: '4px solid #0d9488' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                <div style={{ padding: '8px', borderRadius: '8px', background: '#f0fdfa', color: '#0d9488' }}>
-                  <Sparkles size={20} />
-                </div>
-                <div>
-                  <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>HMDA Masterplan Layouts</h4>
-                  <span style={{ fontSize: '0.78rem', color: '#0d9488', fontWeight: 700 }}>{(1271).toLocaleString()}+ Planning Permissions</span>
-                </div>
-              </div>
-              <p style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                HMDA planning layout permissions across Hyderabad metropolitan region villages, mandals, and survey numbers.
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : (
+      {!hasSearched ? null : (
         /* 2. When SEARCHED: Check file availability and display appropriate state */
         loading ? (
           <div className="glass-card" style={{ padding: '60px 24px', textAlign: 'center', background: '#ffffff', borderRadius: '16px' }}>
@@ -733,7 +621,7 @@ export default function PublicSearchPortal({
             <div className="table-container">
               {activeView === 'files' ? (
                 /* 1. RELATED FILES VIEW TABLE */
-                <table className="data-table">
+                <table className="data-table files-table">
                   <thead>
                     <tr>
                       <th style={{ width: '45px' }}>#</th>
@@ -744,7 +632,7 @@ export default function PublicSearchPortal({
                       <th style={{ width: '95px' }}>Date</th>
                       <th style={{ width: '95px' }}>Status</th>
                       <th>Why It Matched</th>
-                      <th style={{ textAlign: 'center', width: '160px' }}>Actions</th>
+                      <th className="sticky-actions" style={{ textAlign: 'center' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -852,7 +740,7 @@ export default function PublicSearchPortal({
                             {file.date ? (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.82rem', fontWeight: 600, color: '#334155' }}>
                                 <Calendar size={13} color="#059669" />
-                                <span>{file.date}</span>
+                                <span>{formatDate(file.date)}</span>
                               </span>
                             ) : (
                               <span style={{ color: '#94a3b8' }}>—</span>
@@ -880,7 +768,7 @@ export default function PublicSearchPortal({
                           </td>
 
                           {/* Actions: View & Download */}
-                          <td>
+                          <td className="sticky-actions">
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
                               {isAvail ? (
                                 <>
@@ -1089,7 +977,7 @@ export default function PublicSearchPortal({
                                   className="table-action-btn"
                                   style={{ borderColor: '#86efac', color: '#15803d', background: '#f0fdf4', padding: '4px 8px', fontWeight: 600 }}
                                   onClick={() => onOpenPdf(folder, item.proceeding_letter_file || (isDPMS ? 'Proceeding.pdf' : 'Proceeding_Letter.pdf'), 'Proceeding Letter', item.file_number)}
-                                  title="Preview & Download Proceeding Letter PDF from Google Drive"
+                                  title="Preview & Download Proceeding Letter PDF from the local archive"
                                 >
                                   <FileCheck2 size={13} />
                                   <span>Letter (Available)</span>
@@ -1102,7 +990,7 @@ export default function PublicSearchPortal({
                                   className="table-action-btn"
                                   style={{ borderColor: '#5eead4', color: '#0f766e', background: '#f0fdfa', padding: '4px 8px', fontWeight: 600 }}
                                   onClick={() => onOpenPdf(folder, item.inspection_report_file || 'Inspection Report.PDF', 'Site Inspection Report (PDF)', item.file_number)}
-                                  title="Preview Site Inspection Report PDF from Google Drive"
+                                  title="Preview Site Inspection Report PDF from the local archive"
                                 >
                                   <ClipboardList size={13} />
                                   <span>Report (Available)</span>
@@ -1115,7 +1003,7 @@ export default function PublicSearchPortal({
                                   className="table-action-btn"
                                   style={{ borderColor: '#c4b5fd', color: '#6d28d9', background: '#f5f3ff', padding: '4px 8px', fontWeight: 600 }}
                                   onClick={() => onOpenPdf(folder, item.drawing_pdf_file || 'Drawing.pdf', 'Drawing Blueprint (PDF)', item.file_number)}
-                                  title="Preview & Download Approved Blueprint Drawing from Google Drive"
+                                  title="Preview & Download Approved Blueprint Drawing from the local archive"
                                 >
                                   <FileSpreadsheet size={13} />
                                   <span>Blueprint (Available)</span>

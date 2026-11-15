@@ -83,7 +83,7 @@ export default function PdfViewerModal({
         <div className="modal-footer">
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', marginRight: 'auto' }}>
             <ShieldCheck size={14} color="var(--success)" />
-            <span>Streaming verified physical document directly from Google Drive Cloud Storage</span>
+            <span>Streaming verified physical document from the local archive</span>
           </div>
           <button className="page-btn" onClick={onClose}>
             Close Preview

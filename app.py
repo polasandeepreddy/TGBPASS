@@ -70,6 +70,11 @@ def admin_required(f):
     return decorated_function
 
 
+# One-time voluntary UPI donations (records only; no payment gateway)
+from donations import create_blueprint as _create_donations_blueprint
+app.register_blueprint(_create_donations_blueprint(admin_required))
+
+
 # --- REST API Endpoints ---
 
 def _int_arg(name, default):

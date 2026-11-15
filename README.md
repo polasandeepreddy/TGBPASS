@@ -19,3 +19,9 @@ TG-bPASS (Telangana Building Permission & Approval Self-Certification System) Da
    ```bash
    python run.py
    ```
+
+## Donations (voluntary, one-time, direct UPI)
+
+Set in `frontend/.env` (build-time): `VITE_DONATE_UPI_ID=you@bank`, `VITE_DONATE_NAME=Your Name`.
+Records live in a local SQLite file (`donations.db`, override with `DONATIONS_DB_PATH`).
+Donors can only *self-report*; an admin marks a donation **Verified** (Admin → Donations) after matching it with the bank/UPI statement. Tests: `python -m unittest test_donations`.

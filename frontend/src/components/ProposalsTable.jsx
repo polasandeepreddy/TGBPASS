@@ -706,7 +706,7 @@ export default function ProposalsTable({
                           <td colSpan={vault === 'proposals' ? 7 : (vault === 'oc_bp' ? 8 : 9)} style={{ padding: 0 }}>
                             <div className="expandable-row-content">
                               <div>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Google Drive Cloud Folder</div>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Local Archive Folder</div>
                                 <div style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)', marginTop: '4px', wordBreak: 'break-all' }}>
                                   <code>{item.folder_name || '—'}</code>
                                 </div>
